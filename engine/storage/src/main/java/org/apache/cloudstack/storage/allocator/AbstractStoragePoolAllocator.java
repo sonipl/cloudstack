@@ -99,6 +99,9 @@ public abstract class AbstractStoragePoolAllocator extends AdapterBase implement
     @Inject
     protected StoragePoolJoinDao storagePoolJoinDao;
 
+    @Inject
+    private StoragePoolAllocatorFilterHelper storagePoolAllocatorFilterHelper;
+
     @Override
     public boolean configure(String name, Map<String, Object> params) throws ConfigurationException {
         super.configure(name, params);
@@ -286,6 +289,13 @@ public abstract class AbstractStoragePoolAllocator extends AdapterBase implement
         logger.debug("Checking if storage pool [{}] is suitable to disk [{}].", pool, dskCh);
         if (avoid.shouldAvoid(pool)) {
             logger.debug("StoragePool [{}] is in avoid set, skipping this pool to allocation of disk [{}].", pool, dskCh);
+            return false;
+        }
+
+        if (storagePoolAllocatorFilterHelper != null
+                && !storagePoolAllocatorFilterHelper.isPoolAcceptable(pool, dskCh, plan)) {
+            logger.debug("StoragePool [{}] rejected by a registered StoragePoolAllocatorFilter, skipping allocation of disk [{}].",
+                    pool, dskCh);
             return false;
         }
 

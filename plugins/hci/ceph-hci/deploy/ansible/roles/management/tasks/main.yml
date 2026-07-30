@@ -1,0 +1,103 @@
+---
+- name: Install MariaDB and Java
+  dnf:
+    name:
+      - mariadb-server
+      - java-17-openjdk-headless
+      - python3
+      - mysql
+    state: present
+
+- name: Start MariaDB
+  service:
+    name: mariadb
+    state: started
+    enabled: true
+
+- name: Configure CloudStack DB user (lab)
+  shell: |
+    set -e
+    mysql -e "CREATE DATABASE IF NOT EXISTS cloud;"
+    mysql -e "CREATE DATABASE IF NOT EXISTS cloud_usage;"
+    mysql -e "CREATE USER IF NOT EXISTS 'cloud'@'localhost' IDENTIFIED BY '{{ cloudstack_mgmt_db_password | default('cloud') }}';"
+    mysql -e "CREATE USER IF NOT EXISTS 'cloud'@'%' IDENTIFIED BY '{{ cloudstack_mgmt_db_password | default('cloud') }}';"
+    mysql -e "GRANT ALL ON cloud.* TO 'cloud'@'localhost';"
+    mysql -e "GRANT ALL ON cloud.* TO 'cloud'@'%';"
+    mysql -e "GRANT ALL ON cloud_usage.* TO 'cloud'@'localhost';"
+    mysql -e "GRANT ALL ON cloud_usage.* TO 'cloud'@'%';"
+    mysql -e "FLUSH PRIVILEGES;"
+  args:
+    executable: /bin/bash
+
+- name: Add CloudStack yum repository
+  yum_repository:
+    name: cloudstack
+    description: Apache CloudStack
+    baseurl: "http://download.cloudstack.org/centos/$releasever/$basearch/"
+    gpgcheck: false
+    enabled: true
+  failed_when: false
+
+- name: Install cloudstack-management
+  dnf:
+    name:
+      - cloudstack-management
+      - cloudstack-common
+    state: present
+  register: mgmt_pkg
+  failed_when: false
+
+- name: Deploy database schema when cloudstack-setup-databases exists
+  shell: |
+    cloudstack-setup-databases cloud:{{ cloudstack_mgmt_db_password | default('cloud') }}@localhost \
+      --deploy-as=root
+  args:
+    creates: /etc/cloudstack/management/db.properties
+  when: mgmt_pkg is succeeded or mgmt_pkg.rc | default(1) == 0
+  failed_when: false
+
+- name: Setup management server
+  command: cloudstack-setup-management
+  when: mgmt_pkg is succeeded or mgmt_pkg.rc | default(1) == 0
+  failed_when: false
+
+- name: Ensure management SSH key for Ceph HCI plugin
+  openssh_keypair:
+    path: /root/.ssh/id_rsa
+    owner: root
+    group: root
+    mode: "0600"
+    type: rsa
+    size: 4096
+
+- name: Distribute MS public key to HCI nodes for ceph status SSH
+  authorized_key:
+    user: "{{ ceph_ssh_user | default('root') }}"
+    key: "{{ lookup('file', '/root/.ssh/id_rsa.pub') }}"
+    state: present
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['hci_nodes'] }}"
+  failed_when: false
+
+- name: Remember default Ceph HCI plugin SSH settings
+  copy:
+    dest: /root/ceph-hci-global-settings.txt
+    mode: "0644"
+    content: |
+      # Apply in CloudStack Global Settings after UI is up:
+      ceph.hci.allocation.enforce.health=true
+      ceph.hci.health.accepted.states=HEALTH_OK,HEALTH_WARN
+      ceph.hci.health.check.interval=300
+      ceph.hci.monitor.ssh.user=root
+      ceph.hci.monitor.ssh.port=22
+      ceph.hci.monitor.ssh.privatekey.path=/root/.ssh/id_rsa
+
+- name: Package install fallback message
+  debug:
+    msg: >-
+      If cloudstack-management RPMs were not available from yum, build this tree
+      (mvn -Psystemvm package) and install cloud-client / management packages from
+      packaging/centos63 or your CI artifact store. The HCI plugin JAR
+      (cloud-plugin-hci-ceph) must be on the management classpath (included when
+      building client from this branch).
+  when: mgmt_pkg is failed or (mgmt_pkg.rc is defined and mgmt_pkg.rc != 0)

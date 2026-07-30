@@ -1,0 +1,39 @@
+---
+# Deploy CloudStack HCI: OEL9 + KVM + Ceph (cephadm) + CloudStack management
+- name: Common OEL9 baseline
+  hosts: hci
+  become: true
+  gather_facts: true
+  roles:
+    - common
+
+- name: Ceph hyperconverged cluster
+  hosts: hci_nodes
+  become: true
+  roles:
+    - ceph
+
+- name: KVM hypervisor + CloudStack agent
+  hosts: hci_nodes
+  become: true
+  roles:
+    - kvm_agent
+
+- name: CloudStack management server
+  hosts: hci_mgmt
+  become: true
+  roles:
+    - management
+
+- name: HCI plugin post-config hints
+  hosts: hci_mgmt
+  become: true
+  tasks:
+    - name: Show next steps
+      debug:
+        msg:
+          - "CloudStack UI: http://{{ ansible_default_ipv4.address }}:8080/client"
+          - "Default login: admin / password"
+          - "Add RBD primary storage with MON IPs from hci_nodes and pool 'cloudstack'"
+          - "API: listHciCephHealth / refreshHciCephHealth"
+          - "Ensure MS can SSH to MONs as {{ ceph_ssh_user | default('root') }} for the HCI plugin"

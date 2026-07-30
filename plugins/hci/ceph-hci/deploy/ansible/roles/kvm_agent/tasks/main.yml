@@ -1,0 +1,55 @@
+---
+- name: Install KVM and libvirt stack
+  dnf:
+    name:
+      - qemu-kvm
+      - libvirt
+      - libvirt-client
+      - virt-install
+      - bridge-utils
+      - net-tools
+      - java-17-openjdk-headless
+    state: present
+
+- name: Enable libvirtd
+  service:
+    name: libvirtd
+    state: started
+    enabled: true
+
+- name: Ensure nested virt is usable
+  command: egrep -c '(vmx|svm)' /proc/cpuinfo
+  register: virt_flags
+  changed_when: false
+  failed_when: virt_flags.stdout | int < 1
+
+- name: Add CloudStack yum repository (community / Apache packages)
+  yum_repository:
+    name: cloudstack
+    description: Apache CloudStack
+    baseurl: "http://download.cloudstack.org/centos/$releasever/$basearch/"
+    gpgcheck: false
+    enabled: true
+  failed_when: false
+
+- name: Install cloudstack-agent
+  dnf:
+    name: cloudstack-agent
+    state: present
+  register: agent_pkg
+  failed_when: false
+
+- name: Hint when packages are not in yum (build from source)
+  debug:
+    msg: >-
+      cloudstack-agent package was not installed from yum (rc={{ agent_pkg.rc | default('n/a') }}).
+      Build this repository with 'mvn -Psystemvm package' and install the agent RPMs from dist/,
+      or point cloudstack yum baseurl to your internal mirror.
+  when: agent_pkg is failed or (agent_pkg.rc is defined and agent_pkg.rc != 0)
+
+- name: Enable cloudstack-agent when present
+  service:
+    name: cloudstack-agent
+    state: started
+    enabled: true
+  failed_when: false

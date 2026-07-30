@@ -70,6 +70,11 @@
         <property name="vmSnapshotStrategies" value="#{vmSnapshotStrategiesRegistry.registered}" />
     </bean>
 
+    <bean id="storagePoolAllocatorFilterHelper"
+          class="org.apache.cloudstack.storage.allocator.StoragePoolAllocatorFilterHelper">
+        <property name="filters" value="#{storagePoolAllocatorFiltersRegistry.registered}" />
+    </bean>
+
     <bean id="imageStoreDetailsUtil" class="com.cloud.storage.ImageStoreDetailsUtil" />
 
     <bean id="deployAsIsImageStoreHelper" class="org.apache.cloudstack.storage.image.deployasis.DeployAsIsHelperImpl" />

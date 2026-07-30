@@ -42,6 +42,12 @@
     </bean>
 
     <bean class="org.apache.cloudstack.spring.lifecycle.registry.RegistryLifecycle">
+        <property name="registry" ref="storagePoolAllocatorFiltersRegistry" />
+        <property name="typeClass"
+            value="org.apache.cloudstack.engine.subsystem.api.storage.StoragePoolAllocatorFilter" />
+    </bean>
+
+    <bean class="org.apache.cloudstack.spring.lifecycle.registry.RegistryLifecycle">
         <property name="registry" ref="secondaryStorageVmAllocatorsRegistry" />
         <property name="typeClass"
             value="com.cloud.storage.secondary.SecondaryStorageVmAllocator" />

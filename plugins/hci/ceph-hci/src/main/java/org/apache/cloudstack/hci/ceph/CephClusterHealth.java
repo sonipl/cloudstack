@@ -65,50 +65,66 @@ public class CephClusterHealth {
      * differences between Ceph releases (health.status vs health.overall_status).
      */
     public static CephClusterHealth fromStatusJson(String clusterKey, String json) {
-        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        if (json == null || json.isBlank()) {
+            return error(clusterKey, "Empty ceph status JSON");
+        }
+        // SSH output may include banners/MOTD before the JSON object.
+        String trimmed = json.trim();
+        int start = trimmed.indexOf('{');
+        int end = trimmed.lastIndexOf('}');
+        if (start < 0 || end <= start) {
+            return error(clusterKey, "No JSON object in ceph status output");
+        }
+        trimmed = trimmed.substring(start, end + 1);
 
-        String status = null;
-        if (root.has("health") && root.get("health").isJsonObject()) {
-            JsonObject health = root.getAsJsonObject("health");
-            if (health.has("status")) {
-                status = health.get("status").getAsString();
-            } else if (health.has("overall_status")) {
-                status = health.get("overall_status").getAsString();
+        try {
+            JsonObject root = JsonParser.parseString(trimmed).getAsJsonObject();
+
+            String status = null;
+            if (root.has("health") && root.get("health").isJsonObject()) {
+                JsonObject health = root.getAsJsonObject("health");
+                if (health.has("status")) {
+                    status = health.get("status").getAsString();
+                } else if (health.has("overall_status")) {
+                    status = health.get("overall_status").getAsString();
+                }
             }
-        }
 
-        int numOsds = 0;
-        int numOsdsUp = 0;
-        int numOsdsIn = 0;
-        if (root.has("osdmap") && root.get("osdmap").isJsonObject()) {
-            JsonObject osdmap = root.getAsJsonObject("osdmap");
-            if (osdmap.has("osdmap") && osdmap.get("osdmap").isJsonObject()) {
-                osdmap = osdmap.getAsJsonObject("osdmap");
+            int numOsds = 0;
+            int numOsdsUp = 0;
+            int numOsdsIn = 0;
+            if (root.has("osdmap") && root.get("osdmap").isJsonObject()) {
+                JsonObject osdmap = root.getAsJsonObject("osdmap");
+                if (osdmap.has("osdmap") && osdmap.get("osdmap").isJsonObject()) {
+                    osdmap = osdmap.getAsJsonObject("osdmap");
+                }
+                numOsds = osdmap.has("num_osds") ? osdmap.get("num_osds").getAsInt() : 0;
+                numOsdsUp = osdmap.has("num_up_osds") ? osdmap.get("num_up_osds").getAsInt() : 0;
+                numOsdsIn = osdmap.has("num_in_osds") ? osdmap.get("num_in_osds").getAsInt() : 0;
             }
-            numOsds = osdmap.has("num_osds") ? osdmap.get("num_osds").getAsInt() : 0;
-            numOsdsUp = osdmap.has("num_up_osds") ? osdmap.get("num_up_osds").getAsInt() : 0;
-            numOsdsIn = osdmap.has("num_in_osds") ? osdmap.get("num_in_osds").getAsInt() : 0;
-        }
 
-        int numPgs = 0;
-        if (root.has("pgmap") && root.get("pgmap").isJsonObject()) {
-            JsonObject pgmap = root.getAsJsonObject("pgmap");
-            numPgs = pgmap.has("num_pgs") ? pgmap.get("num_pgs").getAsInt() : 0;
-        }
+            int numPgs = 0;
+            if (root.has("pgmap") && root.get("pgmap").isJsonObject()) {
+                JsonObject pgmap = root.getAsJsonObject("pgmap");
+                numPgs = pgmap.has("num_pgs") ? pgmap.get("num_pgs").getAsInt() : 0;
+            }
 
-        int numMons = 0;
-        if (root.has("monmap") && root.get("monmap").isJsonObject()) {
-            JsonObject monmap = root.getAsJsonObject("monmap");
-            numMons = monmap.has("num_mons") ? monmap.get("num_mons").getAsInt() : 0;
-        }
+            int numMons = 0;
+            if (root.has("monmap") && root.get("monmap").isJsonObject()) {
+                JsonObject monmap = root.getAsJsonObject("monmap");
+                numMons = monmap.has("num_mons") ? monmap.get("num_mons").getAsInt() : 0;
+            }
 
-        int quorumSize = 0;
-        if (root.has("quorum") && root.get("quorum").isJsonArray()) {
-            quorumSize = root.getAsJsonArray("quorum").size();
-        }
+            int quorumSize = 0;
+            if (root.has("quorum") && root.get("quorum").isJsonArray()) {
+                quorumSize = root.getAsJsonArray("quorum").size();
+            }
 
-        return new CephClusterHealth(clusterKey, status, numOsds, numOsdsUp, numOsdsIn, numPgs, numMons, quorumSize,
-                System.currentTimeMillis(), null);
+            return new CephClusterHealth(clusterKey, status, numOsds, numOsdsUp, numOsdsIn, numPgs, numMons, quorumSize,
+                    System.currentTimeMillis(), null);
+        } catch (RuntimeException e) {
+            return error(clusterKey, "Failed to parse ceph status JSON: " + e.getMessage());
+        }
     }
 
     public boolean isReachable() {

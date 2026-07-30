@@ -1,0 +1,98 @@
+---
+- name: Install cephadm prerequisites
+  dnf:
+    name:
+      - podman
+      - lvm2
+      - python3
+    state: present
+
+- name: Download cephadm for {{ ceph_release | default('squid') }}
+  get_url:
+    url: "https://download.ceph.com/rpm-{{ ceph_release | default('squid') }}/el9/noarch/cephadm"
+    dest: /usr/local/sbin/cephadm
+    mode: "0755"
+    force: false
+
+- name: Bootstrap Ceph on first node
+  when: inventory_hostname == groups['hci_nodes'][0]
+  block:
+    - name: Check if cluster already bootstrapped
+      stat:
+        path: /etc/ceph/ceph.conf
+      register: ceph_conf
+
+    - name: Bootstrap cephadm cluster
+      command: >
+        cephadm bootstrap
+        --mon-ip {{ ansible_default_ipv4.address }}
+        --ssh-user {{ ceph_ssh_user | default('root') }}
+        --cluster-network {{ ceph_public_network | default('0.0.0.0/0') }}
+        --skip-monitoring-stack
+      args:
+        creates: /etc/ceph/ceph.conf
+      when: not ceph_conf.stat.exists
+
+    - name: Fetch ceph.pub for other nodes
+      fetch:
+        src: /etc/ceph/ceph.pub
+        dest: /tmp/ceph-hci-ceph.pub
+        flat: true
+
+- name: Install ceph public key on all nodes
+  authorized_key:
+    user: "{{ ceph_ssh_user | default('root') }}"
+    key: "{{ lookup('file', '/tmp/ceph-hci-ceph.pub') }}"
+    state: present
+  when: inventory_hostname != groups['hci_nodes'][0]
+  ignore_errors: true
+
+- name: Add hosts and OSDs from bootstrap node
+  when: inventory_hostname == groups['hci_nodes'][0]
+  block:
+    - name: Wait for ceph CLI
+      command: ceph -s
+      register: ceph_status
+      retries: 30
+      delay: 10
+      until: ceph_status.rc == 0
+      changed_when: false
+
+    - name: Add peer hosts to Ceph orchestrator
+      command: "ceph orch host add {{ hostvars[item].inventory_hostname }} {{ hostvars[item].ansible_host | default(hostvars[item].ansible_default_ipv4.address) }}"
+      loop: "{{ groups['hci_nodes'] | difference([inventory_hostname]) }}"
+      register: add_hosts
+      failed_when: false
+      changed_when: add_hosts.rc == 0
+
+    - name: Add OSDs on all available devices (lab disks)
+      command: ceph orch apply osd --all-available-devices
+      register: apply_osd
+      changed_when: "'Scheduled' in apply_osd.stdout or apply_osd.rc == 0"
+      failed_when: false
+
+    - name: Create RBD pool for CloudStack
+      shell: |
+        set -e
+        if ! ceph osd pool ls | grep -qx cloudstack; then
+          ceph osd pool create cloudstack 32 32
+          ceph osd pool application enable cloudstack rbd
+          rbd pool init cloudstack
+        fi
+      args:
+        executable: /bin/bash
+
+    - name: Export admin key for CloudStack
+      shell: ceph auth get-key client.admin
+      register: ceph_admin_key
+      changed_when: false
+
+    - name: Write local credentials file for operators
+      copy:
+        dest: /root/cloudstack-rbd-credentials.txt
+        mode: "0600"
+        content: |
+          rados_monitor={% for h in groups['hci_nodes'] %}{{ hostvars[h].ansible_host | default(hostvars[h].ansible_default_ipv4.address) }}{% if not loop.last %},{% endif %}{% endfor %}
+          rados_pool=cloudstack
+          rados_user=admin
+          rados_secret={{ ceph_admin_key.stdout }}

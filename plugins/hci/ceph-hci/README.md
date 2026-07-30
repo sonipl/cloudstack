@@ -3,15 +3,14 @@
 This plugin turns a **KVM + Apache CloudStack + Ceph** deployment into a
 vSAN-like hyperconverged infrastructure (HCI) solution: the same hosts run
 VMs (KVM) and contribute storage (Ceph OSDs), while CloudStack gains
-data-service awareness of the underlying Ceph clusters — analogous to how
-vCenter/vSAN tracks object health, compliance and placement.
+data-service awareness of the underlying Ceph clusters.
 
 ## What vSAN does -> what this plugin does
 
 | VMware vSAN capability | Equivalent in this plugin |
 |---|---|
 | vSAN health service | `CephHciManager` polls `ceph status` per backing Ceph cluster and caches health |
-| vSAN placement on healthy objects only | `CephHciStoragePoolAllocator` excludes RBD pools on unhealthy/degraded Ceph clusters from VM & volume placement |
+| vSAN placement on healthy objects only | `CephHciStoragePoolAllocatorFilter` is consulted from every stock allocator's `filter()` path and excludes RBD pools on unhealthy Ceph clusters |
 | vSAN degraded/critical alarms | CloudStack alerts (`ALERT.STORAGE.MISC`) raised on Ceph health transitions and recovery |
 | vSAN health UI | `listHciCephHealth` API (per-pool: health, OSDs up/in, PGs, quorum, allocation state) |
 | Skyline re-check on demand | `refreshHciCephHealth` API |
@@ -24,24 +23,24 @@ management-plane intelligence on top.
 ## Components
 
 - `CephHciManagerImpl` — management server component. Groups all `Up` RBD
-  primary storage pools by Ceph cluster endpoint (`monHost:port`), polls
-  `ceph status -f json` over SSH on a configurable interval, caches health,
-  and emits alerts on HEALTH transitions.
-- `CephHciStoragePoolAllocator` — storage pool allocator. Behaves like the
-  standard random allocator across cluster- and zone-scoped pools, but skips
-  RBD pools whose Ceph cluster is not in an accepted health state.
+  primary storage pools by Ceph cluster endpoint (normalized multi-MON
+  `hostAddress` + port), polls `ceph status -f json` over SSH (MON failover),
+  caches health, prunes stale entries, and emits alerts on HEALTH transitions.
+- `CephHciStoragePoolAllocatorFilter` — registered `StoragePoolAllocatorFilter`.
+  Invoked from `AbstractStoragePoolAllocator.filter()` so ClusterScope,
+  ZoneWide, and Local allocators all honor Ceph health without replacing them.
 - API commands (Root Admin):
   - `listHciCephHealth` — per-pool Ceph health and allocation state.
   - `refreshHciCephHealth` — forces an immediate health refresh.
 - `CephClusterHealth` — tolerant parser for `ceph status -f json`
-  (handles both `health.status` and `health.overall_status` schemas).
+  (handles both `health.status` and `health.overall_status` schemas, SSH banners).
 
 ## Global settings (ConfigKeys)
 
 | Setting | Default | Description |
 |---|---|---|
 | `ceph.hci.allocation.enforce.health` | `true` | Exclude RBD pools on unhealthy Ceph clusters from allocation |
-| `ceph.hci.health.accepted.states` | `HEALTH_OK,HEALTH_WARN` | Health states still acceptable for allocation |
+| `ceph.hci.health.accepted.states` | `HEALTH_OK,HEALTH_WARN` | Health states still acceptable for allocation (whitespace-tolerant). `HEALTH_WARN` is accepted by default (Ceph often warns during rebalance); tighten to `HEALTH_OK` for stricter placement. Until the first successful poll, allocation fails open. |
 | `ceph.hci.health.check.interval` | `300` | Seconds between Ceph health polls (0 disables) |
 | `ceph.hci.monitor.ssh.user` | `root` | SSH user for Ceph monitors |
 | `ceph.hci.monitor.ssh.port` | `22` | SSH port for Ceph monitors |
@@ -71,6 +70,9 @@ Deploy Ceph (Reef/Squid) with `cephadm` across the KVM hosts, create an RBD
 pool, then add it to CloudStack as **RBD primary storage** with the MON
 addresses. The plugin discovers all `Up` RBD pools automatically.
 
+For lab/production bootstrap on vCenter (`vc01.vmalpha.com`) with OEL9 VMs,
+see [deploy/README.md](deploy/README.md).
+
 ## Building
 
 ```bash
@@ -86,6 +88,6 @@ mvn -P systemvm install -DskipTests
 mvn -pl plugins/hci/ceph-hci test
 ```
 
-Covers: `ceph status` JSON parsing (legacy + modern schema), OSD degradation
-detection, health-acceptance rules, and allocator gating (unhealthy pools
-excluded and added to the avoid set, zone-wide pools included).
+Covers: `ceph status` JSON parsing (legacy + modern schema, SSH banners),
+multi-MON host parsing / stable cluster keys, health-acceptance rules, and
+allocator filter gating.

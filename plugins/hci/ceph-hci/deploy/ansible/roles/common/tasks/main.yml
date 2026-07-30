@@ -1,0 +1,60 @@
+---
+- name: Ensure EPEL and base tools
+  dnf:
+    name:
+      - epel-release
+      - curl
+      - wget
+      - jq
+      - python3
+      - python3-pip
+      - chrony
+      - firewalld
+      - lvm2
+      - podman
+    state: present
+  retries: 3
+  delay: 5
+
+- name: Enable chronyd and firewalld
+  service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - chronyd
+    - firewalld
+
+- name: Open HCI ports
+  firewalld:
+    port: "{{ item }}"
+    permanent: true
+    state: enabled
+    immediate: true
+  loop:
+    - 22/tcp
+    - 80/tcp
+    - 443/tcp
+    - 8080/tcp
+    - 8250/tcp
+    - 9090/tcp
+    - 3300/tcp
+    - 6789/tcp
+    - 6800-7300/tcp
+    - 16509/tcp
+    - 5900-5999/tcp
+
+- name: Disable SELinux permissive for lab (optional; set enforcing in prod)
+  selinux:
+    policy: targeted
+    state: permissive
+  when: hci_selinux_permissive | default(true) | bool
+
+- name: Ensure /etc/hosts has cluster members
+  lineinfile:
+    path: /etc/hosts
+    regexp: ".*\\b{{ hostvars[item].inventory_hostname }}\\b"
+    line: "{{ hostvars[item].ansible_host }} {{ hostvars[item].inventory_hostname }}"
+    state: present
+  loop: "{{ groups['hci'] }}"
+  when: hostvars[item].ansible_host is defined

@@ -3,7 +3,7 @@
 // this work for additional information regarding copyright ownership.
 // The ASF licenses this file to You under the Apache License, Version 2.0
 // (the "License"); you may not use this file except in compliance with
-// the License.  You may obtain a copy of the License at
+// the License. You may obtain a copy of the License at
 //
 //    http://www.apache.org/licenses/LICENSE-2.0
 //
@@ -51,6 +51,7 @@ import com.cloud.storage.StoragePool;
 import com.cloud.storage.StoragePoolStatus;
 import com.cloud.utils.Pair;
 import com.cloud.utils.component.ManagerBase;
+import com.cloud.utils.concurrency.NamedThreadFactory;
 import com.cloud.utils.ssh.SshHelper;
 
 public class CephHciManagerImpl extends ManagerBase implements CephHciManager {
@@ -68,7 +69,7 @@ public class CephHciManagerImpl extends ManagerBase implements CephHciManager {
     private AlertManager alertManager;
 
     /**
-     * Health cache keyed by Ceph cluster endpoint (monHost:port).
+     * Health cache keyed by normalized Ceph cluster endpoint (sorted mons + port).
      */
     private final Map<String, CephClusterHealth> healthCache = new ConcurrentHashMap<>();
 
@@ -78,7 +79,7 @@ public class CephHciManagerImpl extends ManagerBase implements CephHciManager {
     public boolean start() {
         int interval = CephHciHealthCheckInterval.value();
         if (interval > 0) {
-            healthCheckExecutor = Executors.newSingleThreadScheduledExecutor();
+            healthCheckExecutor = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("Ceph-HCI-Health"));
             healthCheckExecutor.scheduleWithFixedDelay(this::refreshHealthSafely, 0, interval, TimeUnit.SECONDS);
             logger.info("Started Ceph HCI health checker with interval [{}]s.", interval);
         } else {
@@ -91,12 +92,64 @@ public class CephHciManagerImpl extends ManagerBase implements CephHciManager {
     public boolean stop() {
         if (healthCheckExecutor != null) {
             healthCheckExecutor.shutdownNow();
+            try {
+                healthCheckExecutor.awaitTermination(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            healthCheckExecutor = null;
         }
         return true;
     }
 
+    /**
+     * Normalizes RBD hostAddress values that may list multiple MONs
+     * (comma/semicolon/whitespace separated) into a stable cluster key.
+     */
     protected static String clusterKeyFor(StoragePool pool) {
-        return pool.getHostAddress() + ":" + pool.getPort();
+        List<String> mons = parseMonitorHosts(pool.getHostAddress());
+        String monPart = mons.isEmpty() ? String.valueOf(pool.getHostAddress()) : String.join(",", mons);
+        return monPart + ":" + pool.getPort();
+    }
+
+    /**
+     * Parses CloudStack RBD monitor host strings into individual hostnames/IPs.
+     * Accepts comma, semicolon, or whitespace separators; strips optional
+     * {@code host:port} suffixes so SSH uses the dedicated SSH port config.
+     */
+    protected static List<String> parseMonitorHosts(String hostAddress) {
+        List<String> hosts = new ArrayList<>();
+        if (StringUtils.isBlank(hostAddress)) {
+            return hosts;
+        }
+        for (String token : hostAddress.trim().split("[,;\\s]+")) {
+            if (StringUtils.isBlank(token)) {
+                continue;
+            }
+            String host = token.trim();
+            // Strip [ipv6]:port or host:port for SSH target selection.
+            if (host.startsWith("[")) {
+                int end = host.indexOf(']');
+                if (end > 0) {
+                    host = host.substring(1, end);
+                }
+            } else {
+                int colon = host.lastIndexOf(':');
+                if (colon > 0 && host.indexOf(':') == colon) {
+                    // single colon → host:port (not bare IPv6)
+                    String maybePort = host.substring(colon + 1);
+                    if (maybePort.chars().allMatch(Character::isDigit)) {
+                        host = host.substring(0, colon);
+                    }
+                }
+            }
+            if (StringUtils.isNotBlank(host) && !hosts.contains(host)) {
+                hosts.add(host);
+            }
+        }
+        // Stable key regardless of MON ordering in the pool record.
+        hosts.sort(String::compareTo);
+        return hosts;
     }
 
     protected Map<String, List<StoragePoolVO>> listRbdPoolsByCluster() {
@@ -122,17 +175,21 @@ public class CephHciManagerImpl extends ManagerBase implements CephHciManager {
     public void refreshHealth() {
         Map<String, List<StoragePoolVO>> poolsByCluster = listRbdPoolsByCluster();
         if (poolsByCluster.isEmpty()) {
+            healthCache.clear();
             logger.trace("No RBD primary storage pools found, skipping Ceph health refresh.");
             return;
         }
+        Set<String> seen = new HashSet<>();
         for (Map.Entry<String, List<StoragePoolVO>> entry : poolsByCluster.entrySet()) {
             String clusterKey = entry.getKey();
+            seen.add(clusterKey);
             StoragePoolVO pool = entry.getValue().get(0);
             CephClusterHealth previous = healthCache.get(clusterKey);
             CephClusterHealth current = pollClusterHealth(clusterKey, pool);
             healthCache.put(clusterKey, current);
             alertOnHealthTransition(previous, current, entry.getValue());
         }
+        healthCache.keySet().retainAll(seen);
     }
 
     protected CephClusterHealth pollClusterHealth(String clusterKey, StoragePoolVO pool) {
@@ -146,18 +203,33 @@ public class CephHciManagerImpl extends ManagerBase implements CephHciManager {
                 keyFile = new File(keyPath);
             }
         }
-        try {
-            Pair<Boolean, String> result = SshHelper.sshExecute(pool.getHostAddress(), port, user, keyFile, password,
-                    CEPH_STATUS_COMMAND, SSH_COMMAND_TIMEOUT_MS);
-            if (!result.first()) {
-                logger.warn("Failed to collect Ceph health from [{}]: {}", clusterKey, result.second());
-                return CephClusterHealth.error(clusterKey, result.second());
-            }
-            return CephClusterHealth.fromStatusJson(clusterKey, result.second());
-        } catch (Exception e) {
-            logger.warn("Error collecting Ceph health from [{}]: {}", clusterKey, e.getMessage(), e);
-            return CephClusterHealth.error(clusterKey, e.getMessage());
+
+        List<String> mons = parseMonitorHosts(pool.getHostAddress());
+        if (mons.isEmpty() && StringUtils.isNotBlank(pool.getHostAddress())) {
+            mons = List.of(pool.getHostAddress().trim());
         }
+        if (mons.isEmpty()) {
+            return CephClusterHealth.error(clusterKey, "No Ceph monitor hosts configured on storage pool");
+        }
+
+        List<String> errors = new ArrayList<>();
+        for (String monHost : mons) {
+            try {
+                Pair<Boolean, String> result = SshHelper.sshExecute(monHost, port, user, keyFile, password,
+                        CEPH_STATUS_COMMAND, SSH_COMMAND_TIMEOUT_MS);
+                if (result.first()) {
+                    return CephClusterHealth.fromStatusJson(clusterKey, result.second());
+                }
+                errors.add(monHost + ": " + result.second());
+                logger.warn("Failed to collect Ceph health from monitor [{}] of [{}]: {}", monHost, clusterKey,
+                        result.second());
+            } catch (Exception e) {
+                errors.add(monHost + ": " + e.getMessage());
+                logger.warn("Error collecting Ceph health from monitor [{}] of [{}]: {}", monHost, clusterKey,
+                        e.getMessage(), e);
+            }
+        }
+        return CephClusterHealth.error(clusterKey, "All monitors unreachable: " + String.join("; ", errors));
     }
 
     private void alertOnHealthTransition(CephClusterHealth previous, CephClusterHealth current, List<StoragePoolVO> pools) {
@@ -189,7 +261,10 @@ public class CephHciManagerImpl extends ManagerBase implements CephHciManager {
     }
 
     protected Set<String> acceptedHealthStates() {
-        return new HashSet<>(Arrays.asList(CephHciAcceptedHealthStates.value().split(",")));
+        return Arrays.stream(CephHciAcceptedHealthStates.value().split(","))
+                .map(String::trim)
+                .filter(StringUtils::isNotBlank)
+                .collect(Collectors.toSet());
     }
 
     @Override
