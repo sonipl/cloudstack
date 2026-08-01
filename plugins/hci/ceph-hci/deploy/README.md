@@ -106,6 +106,14 @@ verified 2026-07-31):
 - [`network/lab-network-target.env`](network/lab-network-target.env)
 - Apply: `bash network/setup-tplink-lab-vlans.sh --apply-table1`
 
+## PowerDNS01 / PowerDNS02 recursion
+
+External recursion (`www.google.com`) for `10.0.10.21` / `.22` — GW must be
+**vyos01 `10.0.10.3`** (not `10.0.10.1`):
+
+- [`network/POWERDNS-FORWARDERS.md`](network/POWERDNS-FORWARDERS.md)
+- Apply: `bash network/fix-powerdns-forwarders.sh`
+
 Canonical operator copy also lives under `/Users/psoni/Forman/deploy/network/`.
 
 ## Alternative: existing bare-metal / already-running OEL9 hosts
