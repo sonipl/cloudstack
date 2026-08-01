@@ -1,0 +1,8 @@
+# Never commit plaintext lab credentials
+lab-network-secrets.env
+*.passphrase
+*.key
+*.pem
+.env
+.env.*
+!lab-network-secrets.env.example

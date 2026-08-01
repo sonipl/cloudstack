@@ -36,8 +36,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SW01="${SW01:-${SW01_MGMT_IP:-192.168.71.11}}"
 SW02="${SW02:-${SW02_MGMT_IP:-192.168.71.12}}"
 SW_USER="${SW_USER:-admin}"
-SW_PASS="${SW_PASS:-Jatin76monu}"
+# Credentials: export SW_PASS or: source "$(dirname "$0")/load-lab-secrets.sh"
+if [[ -z "${SW_PASS:-}" ]]; then
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/load-lab-secrets.sh" 2>/dev/null || true
+fi
+SW_PASS="${SW_PASS:-}"
 MODE="${1:---dry-run}"
+if [[ -z "$SW_PASS" ]]; then
+  echo "ERROR: SW_PASS not set. source deploy/network/load-lab-secrets.sh or export SW_PASS" >&2
+  exit 1
+fi
 
 
 usage() {

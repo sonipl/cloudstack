@@ -7,17 +7,27 @@
 #
 # Fix: default GW → vyos01 10.0.10.3; keep dnsmasq split-horizon + upstreams.
 #
-# Usage (from Mac / ac01 with sshpass + admin/123456 lab guest pass):
+# Usage:
+#   source deploy/network/load-lab-secrets.sh   # or export PDNS_SSH_PASS
 #   bash deploy/network/fix-powerdns-forwarders.sh
 #   bash deploy/network/fix-powerdns-forwarders.sh --verify
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+[[ -f "${SCRIPT_DIR}/lab-network-target.env" ]] && . "${SCRIPT_DIR}/lab-network-target.env"
+if [[ -z "${PDNS_SSH_PASS:-${SSH_PASS:-}}" ]]; then
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/load-lab-secrets.sh" 2>/dev/null || true
+fi
 
 PDNS01="${PDNS01_HOST:-10.0.10.21}"
 PDNS02="${PDNS02_HOST:-10.0.10.22}"
 GW="${PDNS_DEFAULT_GW:-10.0.10.3}"   # vyos01
 SSH_USER="${PDNS_SSH_USER:-admin}"
-SSH_PASS="${PDNS_SSH_PASS:-123456}"
+SSH_PASS="${PDNS_SSH_PASS:-${SSH_PASS:-}}"
 MODE="${1:---apply}"
+[[ -n "$SSH_PASS" ]] || { echo "ERROR: PDNS_SSH_PASS not set (source load-lab-secrets.sh)" >&2; exit 1; }
 
 remote() {
   local host="$1"
