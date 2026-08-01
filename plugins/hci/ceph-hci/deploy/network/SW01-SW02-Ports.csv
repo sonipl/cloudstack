@@ -1,0 +1,17 @@
+Switch Name,Port No,Role(Cabling),Type,PVID,Untagged,Tagged
+SW01,1,Oelbm01-nic2,,1,1,10-30
+SW01,2,Pve03-nic1-pub-trunk,,1,1,10-30
+SW01,3,Pve04-nic1-pub-trunk,,1,1,10-30
+SW01,4,Pve05-nic1-pub-trunk,,1,1,10-30
+SW01,5,Pve03-nic3-ptv-access,Access,1500,1500,
+SW01,6,Pve04-nic3-ptv-access,Access,1500,1500,
+SW01,7,Pve05-nic3-ptv-access,Access,1500,1500,
+SW01,8,Uplink / home,Access,1,1,
+SW02,1,Foreman-nic2,,1,1,10-30
+SW02,2,Pve03-nic2-pub-trunk,,1,1,10-30
+SW02,3,Pve04-nic2-pub-trunk,,1,1,10-30
+SW02,4,Pve05-nic2-pub-trunk,,1,1,10-30
+SW02,5,Pve03-nic4-ptv-access,Access,1500,1500,
+SW02,6,Pve04-nic4-ptv-access,Access,1500,1500,
+SW02,7,Pve05-nic4-ptv-access,Access,1500,1500,
+SW02,8,Uplink / home,Access,1,1,

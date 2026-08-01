@@ -96,6 +96,18 @@ refreshHciCephHealth
 Nested virtualization must be enabled on the HCI node VMs (`vhv.enable = TRUE`
 is set by `govc-create-vms.sh`).
 
+## Lab switch baseline (SW01 / SW02)
+
+Permanent port/VLAN record for the TP-Link TL-SG108E lab switches (Table 1,
+verified 2026-07-31):
+
+- [`network/SW01-SW02-PORTS.md`](network/SW01-SW02-PORTS.md)
+- [`network/SW01-SW02-Ports.csv`](network/SW01-SW02-Ports.csv)
+- [`network/lab-network-target.env`](network/lab-network-target.env)
+- Apply: `bash network/setup-tplink-lab-vlans.sh --apply-table1`
+
+Canonical operator copy also lives under `/Users/psoni/Forman/deploy/network/`.
+
 ## Alternative: existing bare-metal / already-running OEL9 hosts
 
 Skip Step 1. Copy `inventory.example.ini` → `inventory.ini`, set host IPs, run
